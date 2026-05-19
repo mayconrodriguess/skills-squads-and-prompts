@@ -28,267 +28,282 @@ Servidor MCP "obsidian-mcp-server" (cyanheads, via npx)
 
 ---
 
-## Pré-requisitos
+# Obsidian MCP - Auto Instalacao (AI) - Copiar e colar em sua IA
 
-| Item | Como verificar | Como instalar se faltar |
-|------|----------------|--------------------------|
-| Obsidian | Abrir o app | https://obsidian.md |
-| Node.js 18+ | `node --version` | https://nodejs.org (LTS) |
-| Cliente MCP | Claude Desktop / VS Code 1.99+ / Cursor | site oficial de cada um |
+> [!IMPORTANT]
+> Regra de execucao: antes de criar qualquer diretorio que nao exista, pergunte ao usuario se tem permissao para cria-lo.
 
----
+## Objetivo
 
-## PARTE 1 — Plugin Local REST API no Obsidian
+Configurar agentes de IA para acessar o vault do Obsidian pelo MCP nativo do plugin **Local REST API**.
 
-### Instalação automática (para IA executar)
+Desde as versoes recentes do plugin, nao e necessario instalar servidor MCP de terceiro para Obsidian. O proprio plugin expoe o servidor MCP em:
+
+```text
+http://127.0.0.1:27123/mcp/
+```
+
+Use servidores terceiros apenas como fallback para clientes que nao suportam Streamable HTTP MCP.
+
+## Arquitetura recomendada
+
+```text
+Cliente MCP / Agente IA
+  -> Streamable HTTP MCP
+    -> http://127.0.0.1:27123/mcp/
+      -> Obsidian Local REST API
+        -> Vault aberto no Obsidian
+```
+
+## Requisitos
+
+- Obsidian instalado.
+- Vault correto aberto no Obsidian.
+- Plugin comunitario **Local REST API** instalado e ativado.
+- HTTP server do plugin ativado na porta `27123`.
+- API key copiada em `Settings -> Local REST API`.
+- Cliente MCP com suporte a Streamable HTTP ou bridge `mcp-remote`.
+
+## Passo 1 - Instalar o plugin Local REST API
+
+Instale pelo Obsidian:
+
+```text
+Settings -> Community Plugins -> Browse -> Local REST API -> Install -> Enable
+```
+
+Depois abra:
+
+```text
+Settings -> Local REST API
+```
+
+Confirme:
+
+- API key gerada.
+- HTTP server habilitado.
+- Porta HTTP `27123`.
+- Se usar HTTPS, porta comum `27124` com certificado autoassinado.
+
+## Passo 2 - Validar REST API
+
+Servidor ativo, sem autenticacao:
 
 ```powershell
-# Variáveis (ajuste o $vault para o seu caminho)
-$vault = "C:\Users\maycon\OneDrive\01_OBSIDIAN"
-$pluginDir = "$vault\.obsidian\plugins\obsidian-local-rest-api"
-
-# Gerar API key segura (64 hex)
-$apiKey = -join ((1..32) | ForEach-Object { '{0:x2}' -f (Get-Random -Max 256) })
-
-# Baixar plugin
-New-Item -ItemType Directory -Force -Path $pluginDir | Out-Null
-$base = "https://github.com/coddingtonbear/obsidian-local-rest-api/releases/latest/download"
-Invoke-WebRequest "$base/main.json" -OutFile "$pluginDir\manifest.json" -UseBasicParsing
-Invoke-WebRequest "$base/manifest.json" -OutFile "$pluginDir\manifest.json" -UseBasicParsing
-Invoke-WebRequest "$base/main.js" -OutFile "$pluginDir\main.js" -UseBasicParsing
-
-# Configurar plugin (HTTP forçado)
-@"
-{
-  "apiKey": "$apiKey",
-  "crypto": {},
-  "enableInsecureServer": true,
-  "insecurePort": 27123,
-  "enableSecureServer": false,
-  "bindingHost": "127.0.0.1"
-}
-"@ | Set-Content "$pluginDir\data.json" -Encoding utf8
-
-# Habilitar plugin no Obsidian
-$cpFile = "$vault\.obsidian\community-plugins.json"
-$cp = if (Test-Path $cpFile) { Get-Content $cpFile -Raw | ConvertFrom-Json } else { @() }
-if ($cp -notcontains "obsidian-local-rest-api") {
-    $cp = @($cp) + "obsidian-local-rest-api"
-    $cp | ConvertTo-Json | Set-Content $cpFile -Encoding utf8
-}
-
-Write-Host "API Key gerada: $apiKey"
-Write-Host "Reinicie o Obsidian: taskkill /F /IM Obsidian.exe /T ; depois abra novamente"
+curl.exe -k http://127.0.0.1:27123/
 ```
 
-### Validar (após reiniciar Obsidian)
+Listar raiz do vault, com autenticacao:
+
+```powershell
+curl.exe -k -H "Authorization: Bearer <sua-api-key>" http://127.0.0.1:27123/vault/
+```
+
+Ler uma nota:
+
+```powershell
+curl.exe -k -H "Authorization: Bearer <sua-api-key>" http://127.0.0.1:27123/vault/path/to/note.md
+```
+
+> [!WARNING]
+> Nunca grave API key em nota do vault, repositorio ou documento sincronizado. Use variavel de ambiente ou arquivo local fora do vault.
+
+## Passo 3 - Validar MCP nativo
+
+O endpoint MCP usa Streamable HTTP e exige header `Authorization`.
+
+Um `GET` simples em `/mcp/` pode retornar `406 Not Acceptable` se o cliente nao enviar `Accept: application/json, text/event-stream`. Isso e normal.
+
+Teste real de handshake MCP:
+
+```powershell
+$body = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"mcp-check","version":"0.0.1"}}}'
+$bodyPath = Join-Path $env:TEMP "obsidian-mcp-init.json"
+$body | Set-Content -Path $bodyPath -NoNewline -Encoding ASCII
+
+curl.exe -k -X POST `
+  -H "Authorization: Bearer <sua-api-key>" `
+  -H "Content-Type: application/json" `
+  -H "Accept: application/json, text/event-stream" `
+  --data-binary "@$bodyPath" `
+  http://127.0.0.1:27123/mcp/
+```
+
+Resultado esperado:
+
+```json
+{
+  "serverInfo": {
+    "name": "obsidian-local-rest-api",
+    "version": "1.0.0"
+  }
+}
+```
+
+## Passo 4 - Configurar Codex
+
+Edite:
+
+```text
+C:\Users\Maycon\.codex\config.toml
+```
+
+Use a API key em variavel de ambiente do usuario, nao no TOML:
+
+```powershell
+[Environment]::SetEnvironmentVariable("OBSIDIAN_API_KEY", "<sua-api-key>", "User")
+```
+
+Adicione ao `config.toml`:
+
+```toml
+[mcp_servers.obsidian]
+url = "http://127.0.0.1:27123/mcp/"
+bearer_token_env_var = "OBSIDIAN_API_KEY"
+startup_timeout_sec = 30
+tool_timeout_sec = 60
+enabled = true
+```
+
+Depois reinicie o Codex para carregar a variavel de ambiente e o servidor MCP.
+
+## Passo 5 - Configurar Claude Code
+
+Via CLI:
 
 ```bash
-curl -s http://127.0.0.1:27123/ -H "Authorization: Bearer SUA_API_KEY"
-# Esperado: {"status":"OK","authenticated":true,...}
+claude mcp add --transport http obsidian http://127.0.0.1:27123/mcp/ \
+  --header "Authorization: Bearer <sua-api-key>"
 ```
 
-### Lições aprendidas (importantes)
-
-1. **Campos do `data.json` NÃO seguem nomes da UI.** Use exatamente: `enableInsecureServer`, `insecurePort`, `enableSecureServer`. Errado: `enableHttp`, `httpPort`.
-2. **HTTPS sobe por padrão.** Sem `enableSecureServer: false`, o plugin usa porta 27124 com cert inválido.
-3. **Reiniciar Obsidian:** `taskkill /F /IM Obsidian.exe /T` (o `/T` mata processos filhos).
-
----
-
-## PARTE 2 — Servidor MCP (escolha de pacote)
-
-### Recomendado: `obsidian-mcp-server` (cyanheads) — leitura + escrita
-
-Suporta: read, create, update, append, search, list, tags, frontmatter, mover, renomear.
-**Requer:** plugin Local REST API rodando.
-
-### Alternativa simples: `mcp-obsidian` (npm) — só leitura
-
-Lê arquivos direto do disco, **não precisa do Local REST API**, mas só faz `read_notes` e `search_notes`.
-Útil se você só quer consulta.
-
----
-
-## PARTE 3 — Configuração por cliente MCP
-
-> **Padrão importante (Windows):** sempre use o **caminho completo** para `npx.cmd`. Apps como Claude Desktop não herdam o PATH do sistema.
-> Caminho típico: `C:\\Program Files\\nodejs\\npx.cmd` (note as barras duplas no JSON).
->
-> **Linux/macOS:** basta `"command": "npx"`.
-
-### Bloco padrão (válido para Claude Desktop, Claude Code, Cursor)
-
-Nome do arquivo varia, mas o conteúdo é o mesmo:
+Ou em configuracao JSON:
 
 ```json
 {
   "mcpServers": {
     "obsidian": {
-      "command": "C:\\Program Files\\nodejs\\npx.cmd",
-      "args": ["-y", "obsidian-mcp-server"],
-      "env": {
-        "OBSIDIAN_API_KEY": "SUA_API_KEY_AQUI",
-        "OBSIDIAN_BASE_URL": "http://127.0.0.1:27123",
-        "OBSIDIAN_VERIFY_SSL": "false",
-        "MCP_TRANSPORT_TYPE": "stdio"
+      "type": "http",
+      "url": "http://127.0.0.1:27123/mcp/",
+      "headers": {
+        "Authorization": "Bearer <sua-api-key>"
       }
     }
   }
 }
 ```
 
-### VS Code (formato diferente)
+## Passo 6 - Configurar Claude Desktop
 
-`Ctrl+Shift+P` → **MCP: Open User Configuration**:
+Claude Desktop nao suporta HTTP MCP remoto de forma nativa em algumas instalacoes. Use `mcp-remote` como bridge.
+
+Arquivo Windows:
+
+```text
+%APPDATA%\Claude\claude_desktop_config.json
+```
+
+Configuracao:
 
 ```json
 {
-  "servers": {
+  "mcpServers": {
     "obsidian": {
-      "type": "stdio",
-      "command": "C:\\Program Files\\nodejs\\npx.cmd",
-      "args": ["-y", "obsidian-mcp-server"],
-      "env": {
-        "OBSIDIAN_API_KEY": "SUA_API_KEY_AQUI",
-        "OBSIDIAN_BASE_URL": "http://127.0.0.1:27123",
-        "OBSIDIAN_VERIFY_SSL": "false",
-        "MCP_TRANSPORT_TYPE": "stdio"
+      "command": "npx",
+      "args": [
+        "mcp-remote@latest",
+        "http://127.0.0.1:27123/mcp/",
+        "--header",
+        "Authorization: Bearer <sua-api-key>"
+      ]
+    }
+  }
+}
+```
+
+Reinicie o Claude Desktop apos salvar.
+
+## Passo 7 - Configurar Cursor
+
+Arquivo global ou de projeto:
+
+```text
+~/.cursor/mcp.json
+.cursor/mcp.json
+```
+
+Configuracao:
+
+```json
+{
+  "mcpServers": {
+    "obsidian": {
+      "url": "http://127.0.0.1:27123/mcp/",
+      "headers": {
+        "Authorization": "Bearer <sua-api-key>"
       }
     }
   }
 }
 ```
 
-### Localizações dos arquivos por cliente
+## Tools MCP disponiveis
 
-| Cliente | Caminho Windows | Caminho Linux/macOS |
-|---------|-----------------|---------------------|
-| Claude Desktop | `%APPDATA%\Claude\claude_desktop_config.json` | `~/Library/Application Support/Claude/claude_desktop_config.json` |
-| Claude Code | `%USERPROFILE%\.claude\claude_desktop_config.json` | `~/.claude/claude_desktop_config.json` |
-| Cursor | `%USERPROFILE%\.cursor\mcp.json` | `~/.cursor/mcp.json` |
-| VS Code | via comando `MCP: Open User Configuration` | idem |
+| Tool | Descricao |
+|------|-----------|
+| `vault_list` | Lista arquivos e subdiretorios. |
+| `vault_read` | Le conteudo, frontmatter, tags, links e stats. |
+| `vault_write` | Cria ou sobrescreve arquivo. |
+| `vault_append` | Adiciona conteudo ao final do arquivo. |
+| `vault_patch` | Edita heading, block reference ou frontmatter especifico. |
+| `vault_delete` | Deleta arquivo do vault. |
+| `vault_get_document_map` | Lista headings, block refs e campos de frontmatter. |
+| `active_file_get_path` | Retorna caminho do arquivo aberto. |
+| `periodic_note_get_path` | Retorna caminho da nota periodica atual. |
+| `search_query` | Busca via JsonLogic em metadados. |
+| `search_simple` | Busca full-text nativa do Obsidian. |
+| `tag_list` | Lista tags com contagem. |
+| `command_list` | Lista comandos do Obsidian. |
+| `command_execute` | Executa comando por ID. |
+| `open_file` | Abre arquivo na UI do Obsidian. |
 
----
+## Endpoints REST uteis
 
-## PARTE 4 — Variáveis de ambiente (referência)
+| Endpoint | Metodos | Descricao |
+|----------|---------|-----------|
+| `/vault/{path}` | GET PUT PATCH POST DELETE | Ler, escrever ou deletar arquivo. |
+| `/active/` | GET PUT PATCH POST DELETE | Operar no arquivo ativo. |
+| `/periodic/{period}/` | GET PUT PATCH POST DELETE | Nota periodica atual. |
+| `/search/simple/` | POST | Busca full-text. |
+| `/search/` | POST | Busca estruturada via JsonLogic. |
+| `/commands/` | GET | Listar comandos. |
+| `/commands/{commandId}` | POST | Executar comando. |
+| `/tags/` | GET | Listar tags. |
+| `/open/{path}` | POST | Abrir arquivo na UI. |
+| `/` | GET | Status do servidor e auth. |
+| `/mcp/` | GET POST | Servidor MCP nativo do plugin. |
 
-| Variável | Obrigatório? | Default | Descrição |
-|----------|--------------|---------|-----------|
-| `OBSIDIAN_API_KEY` | Sim | — | API Key do plugin Local REST API |
-| `OBSIDIAN_BASE_URL` | Recomendado | `https://127.0.0.1:27124` | URL completa (use HTTP se forçou HTTP) |
-| `OBSIDIAN_VERIFY_SSL` | Recomendado | `true` | `false` para certificados auto-assinados ou HTTP |
-| `MCP_TRANSPORT_TYPE` | Não | `stdio` | `stdio` para clientes locais |
-| `OBSIDIAN_ENABLE_CACHE` | Não | `true` | Cache em memória |
-| `OBSIDIAN_CACHE_REFRESH_INTERVAL_MIN` | Não | `10` | Refresh do cache (min) |
+## Diagnostico rapido
 
----
+| Sintoma | Causa provavel | Correcao |
+|---------|----------------|----------|
+| `401 Unauthorized` | API key errada ou vault diferente aberto. | Copiar a chave do vault ativo em Settings -> Local REST API. |
+| `ECONNREFUSED` | Obsidian fechado ou HTTP server desligado. | Abrir Obsidian e ativar HTTP server. |
+| `406 Not Acceptable` em GET `/mcp/` | Header `Accept` ausente. | Normal; testar com POST initialize ou cliente MCP real. |
+| Cliente nao lista tools | Cliente nao reiniciado ou variavel de ambiente nao carregada. | Reiniciar cliente e validar env. |
+| Certificado invalido | Uso de HTTPS autoassinado. | Usar HTTP 27123 local ou confiar o certificado. |
 
-## PARTE 5 — Startup automático do Obsidian
+## Estado desta instalacao
 
-Sem o Obsidian aberto, o plugin não responde e a IA não acessa o vault.
+| Item | Valor |
+|------|-------|
+| Vault ativo observado | `G:\Meu Drive\.01_OBSIDIAN` |
+| HTTP MCP | `http://127.0.0.1:27123/mcp/` |
+| Auth | `Authorization: Bearer <api-key>` |
+| Codex | Usa `bearer_token_env_var = "OBSIDIAN_API_KEY"` |
+| Servidor terceiro | Nao necessario para o fluxo principal |
 
-```powershell
-$action = New-ScheduledTaskAction -Execute "C:\Program Files\Obsidian\Obsidian.exe"
-$trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit 0 -StartWhenAvailable
-Register-ScheduledTask -TaskName "Obsidian Startup" -Action $action -Trigger $trigger -Settings $settings -Force
-```
+## Relacionados
 
-**Linux (systemd user):**
-
-```bash
-mkdir -p ~/.config/systemd/user
-cat > ~/.config/systemd/user/obsidian.service <<EOF
-[Unit]
-Description=Obsidian
-After=graphical-session.target
-
-[Service]
-ExecStart=/usr/bin/obsidian
-Restart=on-failure
-
-[Install]
-WantedBy=default.target
-EOF
-systemctl --user enable --now obsidian.service
-```
-
----
-
-## PARTE 6 — Validação final
-
-Para cada cliente MCP configurado, executar **na ordem**:
-
-1. **API respondendo:**
-   ```bash
-   curl -s http://127.0.0.1:27123/ -H "Authorization: Bearer $API_KEY"
-   ```
-   → Esperado: `"authenticated":true`
-
-2. **MCP Server inicia sem erro:**
-   ```bash
-   OBSIDIAN_API_KEY=$API_KEY OBSIDIAN_BASE_URL=http://127.0.0.1:27123 OBSIDIAN_VERIFY_SSL=false npx -y obsidian-mcp-server
-   ```
-   → Esperado: nenhum erro, processo aguarda stdin
-
-3. **Cliente carrega o servidor:**
-   - Claude Desktop: `Settings → Developer` → `obsidian` ponto verde
-   - Claude Code: `claude mcp list` mostra `obsidian`
-   - VS Code: chat em modo Agent lista `obsidian` nas tools
-
-4. **Comando real:**
-   > "Liste os arquivos da pasta '01 - Cérebro' do meu vault Obsidian"
-   → IA usa a tool MCP e retorna a lista
-
----
-
-## PARTE 7 — Diagnóstico
-
-### Logs
-
-| Cliente | Local |
-|---------|-------|
-| Claude Desktop | `%APPDATA%\Claude\logs\mcp-server-obsidian.log` |
-| Claude Code | `%USERPROFILE%\.claude\logs\` |
-| VS Code | Output panel → "MCP" |
-
-### Erros comuns
-
-| Sintoma | Causa | Solução |
-|---------|-------|---------|
-| "Server transport closed unexpectedly" | `npx` não encontrado, ou args/env errados | Caminho completo de `npx.cmd` + checar log |
-| "Unauthorized" / 401 | API key errada | Re-copiar do plugin |
-| "ECONNREFUSED" | Obsidian fechado | Abrir Obsidian e aguardar 5s |
-| `Usage: mcp-obsidian <vault-directory>` | Pacote errado (`mcp-obsidian` ≠ `obsidian-mcp-server`) | Trocar para `obsidian-mcp-server` |
-| Plugin sobe em 27124 (HTTPS) e dá erro SSL | Falta `enableSecureServer: false` no data.json | Editar e reiniciar Obsidian |
-
----
-
-## Estado atual desta instalação
-
-| Componente | Status |
-|------------|--------|
-| Vault | `C:\Users\maycon\OneDrive\01_OBSIDIAN` |
-| Node.js | v24.15.0 |
-| Plugin Local REST API | v3.6.1 ativo, HTTP 27123 |
-| API Key | configurada (ver `.obsidian/plugins/obsidian-local-rest-api/data.json`) |
-| MCP Server | `obsidian-mcp-server` (cyanheads) — leitura + escrita |
-| Claude Desktop | configurado |
-| Claude Code | configurado |
-| Cursor | configurado |
-| VS Code | pendente (config não localizado) |
-| Obsidian no startup | configurado (Task Scheduler) |
-
----
-
-## Como uma IA agente usa este documento
-
-Se você é uma IA com acesso a terminal, siga este fluxo de decisão:
-
-1. Rode o curl da PARTE 6, item 1. **Falha?** → vá para PARTE 1.
-2. Rode o teste do MCP Server, item 2. **Falha?** → vá para PARTE 2 e revise o pacote escolhido.
-3. Verifique o config do cliente alvo na PARTE 3. **Faltando?** → use o bloco padrão.
-4. Para Windows, **sempre** use `"command": "C:\\Program Files\\nodejs\\npx.cmd"`.
-5. Em caso de erro, sempre leia primeiro o log em PARTE 7.
-
+- [[Obsidian MCP - Guia Manual (Humano)]]
+- [[Obsidian MCP - README]]
+- [[Procedimento - Obsidian sempre conectado via MCP]]
